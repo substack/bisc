@@ -109,14 +109,20 @@ runState state = do
     return state''
 
 nextState :: State -> State
-nextState state = rJump state arity where
-    inst = instruction $ drop ip (program state)
+nextState state = rJump state' (arity + iSize) where
+    state' = (iFunc inst) args state
+    (inst,iSize) = instruction $ drop ip (program state)
+    
+    args :: Bits
+    args = take arity $ drop iSize $ drop ip $ program state
+    
+    arity, ip :: Int
     arity = iArity inst
     ip = bToI $ regGet' state "ip"
 
-instruction :: [Bool] -> Instruction
-instruction program = inst M.! i where
-    i = head $ filter (`M.member` inst) $ inits program
+instruction :: [Bool] -> (Instruction,Int)
+instruction program = (inst M.!) &&& length
+    $ head $ filter (`M.member` inst) $ inits program
 
 rJump :: State -> Int -> State
 rJump state i = regAdjust' state "ip" (+ (iToB i))
