@@ -1,8 +1,42 @@
+{-
+    BISC - the bit-vector instruction set
+        sounds like: bisque
+        rhymes with: risk, disk, whisk, brisk, elektrisk
+    
+    Features:
+        * All instructions are bit aligned for better huffman coding! Save every
+          bit! Except for all the bits wasted out of laziness.
+          
+        * Registers are infinite bit vectors! This would make this instruction
+          set hard/impossible to implement in hardware probably. That is
+          somebody else's problem.
+        
+        * There is a stack of registers to create lexical closures! The
+          programmer need not worry about a function call's side effects on the
+          registers. Proper isolation!
+          
+        * Instructions can have dynamic arity! With precision to the bit!
+          It would be trivial to allow instructions to modify the instruction
+          table at runtime.
+    
+    Caveats:
+        * It's really complex. It'd be much worse in C. Blame the deadline for
+          some of the ugliness.
+        
+        * The implementation is very fargone and abstracted away from any actual 
+          raw bit twiddling. This is arguably a good thing!
+        
+        * Modern optimizations would be really hard to implement. Old
+          optimizations for non-Von Neumann architectures will probably work
+          well enough however.
+-}
+
 {-# LANGUAGE FlexibleInstances #-}
 module Main where
 
 import VM.Util
 
+import Data.Bits (xor)
 import qualified Data.Map as M
 import Control.Arrow
 import System.IO
@@ -10,9 +44,10 @@ import Control.Monad
 import Data.BitString
 import Control.Applicative
 import Data.Foldable (toList)
-import Data.List (inits)
-import Data.List.Split (splitPlaces)
+import Data.List (inits,intersperse)
+import Data.List.Split (splitPlaces,splitEvery)
 import System.IO.Unsafe
+import System.Environment (getArgs)
 
 type Bits = [Bool]
 
@@ -21,8 +56,34 @@ data Instruction = Instruction {
     iFunc :: [Bits] -> State -> State
 }
 
+
 main :: IO Int
-main = (bToI <$>) . runProgram =<< loadProgram <$> readFile "moo.asm" 
+main = mainArgs =<< getArgs
+
+-- to call main from interactive console with arguments
+mainArgs :: [String] -> IO Int
+mainArgs args = do
+    when (null args) $ error "Usage: bisc [filename.asm]"
+    
+    state <- loadProgram <$> readFile (head args)
+    let -- wrap long lines and indent to make the bytecode output look nice
+        wrap cols indent =
+            concatMap (++ (replicate indent ' '))
+            . intersperse "\n"
+            . ("" :)
+            . splitEvery (cols - indent)
+        bits = fromB $ program state
+   
+    putStrLn $ "Bytecode: "
+        ++ (show $ length bits) ++ " bits, "
+        ++ (show $ (fromIntegral $ length bits) / 8) ++ " bytes, "
+        ++ (wrap 80 4 bits) ++ "\n"
+    
+    code <- runProgram state
+    putStrLn "Return value:"
+    putStrLn $ "    Binary: " ++ (wrap 80 8 $ fromB code) ++ "\n"
+    putStrLn $ "    Integer: " ++ show (bToI code) ++ "\n"
+    return $ bToI code
 
 instTable :: M.Map String Bits
 instTable = M.fromList $ map fst instDefs
@@ -142,6 +203,36 @@ instDefs = [
                     if regGet state x == regGet state y
                         then rJump state addr else state
         }),
+        -- bitwise "and" of two registers, storing the result in a third
+        (("and", toB "101010"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $
+                    zipWith (&&) (regGet state x) (regGet state y)
+        }),
+        -- bitwise "or" of two registers, storing the result in a third
+        (("or", toB "101011"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $
+                    zipWith (||) (regGet state x) (regGet state y)
+        }),
+        -- bitwise "xor" of two registers, storing the result in a third
+        (("xor", toB "101100"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $
+                    zipWith (\x y -> (not x && y) || (x && not y))
+                        (regGet state x) (regGet state y)
+        }),
+        -- bitwise "nand" of two registers, storing the result in a third
+        (("nand", toB "101100"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $
+                    zipWith (\x y -> not (x && y))
+                        (regGet state x) (regGet state y)
+        }),
         -- compute the number of bits used in a register
         (("length", toB "111100"), Instruction {
             iArity = [6,6],
@@ -185,10 +276,7 @@ regGet' :: State -> String -> Bits
 regGet' state name = regGet state $ regTable M.! name
 
 regSet :: State -> Register -> Bits -> State
-regSet state reg bits = state {
-        registerStack = (M.insert reg bits $ head $ registerStack state)
-            : (tail $ registerStack state)
-    }
+regSet state reg bits = regAdjust state reg (const bits)
 
 regSet' :: State -> String -> Bits -> State
 regSet' state name bits = regSet state (regTable M.! name) bits
@@ -237,11 +325,19 @@ assemble prog = concatMap parseWord $ words
         
         parseWord :: String -> Bits
         parseWord (sigil:word) = case sigil of
+            -- $ : register
             '$' -> regTable M.! word
+            -- b : binary string
             'b' -> toB word
+            -- i : 32-bit integer
             'i' -> reverse $ take 32 $ reverse
                 $ (replicate 32 False) ++ (iToB $ read word)
+            -- . : instruction
             '.' -> instTable M.! word
+            -- * : label
+            '*' -> undefined
+            -- & : address of label
+            '&' -> undefined
 
 writeInput :: State -> Char -> State
 writeInput state char = state { inputQueue = input } where

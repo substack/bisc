@@ -1,4 +1,4 @@
-; program that doesn't halt (anymore)
+; do some arithmetic
 
 .loadI $b i1327 ; load an integer (32 bits)
 
