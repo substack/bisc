@@ -1,0 +1,16 @@
+arbitrary bit vectors for better huffman coding
+this would be such a feat to actually build
+infinite addressable memory space BY DESIGN THAT'S RIGHT
+
+instructions
+    swap two instructions
+
+meta registers
+    register size register
+        sets the register size 
+        modern compilers need lots of register space
+    register size register's register size register
+        sets the size of the register size register,
+        depends on the register size register
+    general registers register
+        number of general registers to register
