@@ -45,6 +45,8 @@ regTable = M.fromList
     $ replicateM 6 [False,True]
 
 type Registers = M.Map Register Bits
+initRegisters :: Registers
+initRegisters = M.fromList $ zip (M.elems regTable) $ repeat []
 
 regGet :: State -> Register -> Bits
 regGet state reg = (head $ registerStack state) M.! reg
@@ -79,6 +81,17 @@ data State = State {
     inputQueue :: Bits,
     outputQueue :: Bits
 } | Terminated
+
+loadProgram :: String -> State
+loadProgram prog = State {
+        programStack = [],
+        argumentStack = [],
+        callStack = [],
+        registerStack = [initRegisters],
+        program = toBits prog,
+        inputQueue = [],
+        outputQueue = []
+    }
 
 writeInput :: State -> Char -> State
 writeInput state char = state { inputQueue = input } where
