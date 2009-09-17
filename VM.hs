@@ -29,12 +29,17 @@ inst = M.fromList $ map (first snd) instDefs
 
 instDefs :: [ ((String, [Bool]), Instruction) ]
 instDefs = [
-        (("mov", toB "00"), Instruction {
+        (("mov", toB "000"), Instruction {
             iArity = [6,6],
             iFunc = \[dst,src] state ->
                 regSet state dst $ regGet state src
         }),
-        (("loadK", toB "00"), Instruction {
+        (("load32", toB "0010"), Instruction {
+            iArity = [6,32],
+            iFunc = \[dst,bits] state ->
+                regSet state dst bits
+        }),
+        (("loadK", toB "0001"), Instruction {
             iArity = [6,10],
             iFunc = \[dst,size] state ->
                 let bits = takeFromIp state (bToI size)
@@ -134,7 +139,8 @@ assemble prog = concatMap parseWord $ words prog where
     parseWord (sigil:word) = case sigil of
         '$' -> regTable M.! word
         'b' -> toB word
-        'i' -> iToB $ read word
+        'i' -> reverse $ take 32 $ reverse
+            $ (replicate 32 False) ++ (iToB $ read word)
         '.' -> instTable M.! word
 
 writeInput :: State -> Char -> State
