@@ -1,5 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
-module VM where
+module Main where
 
 import VM.Util
 
@@ -21,6 +21,9 @@ data Instruction = Instruction {
     iFunc :: [Bits] -> State -> State
 }
 
+main :: IO Int
+main = (bToI <$>) . runProgram =<< loadProgram <$> readFile "moo.asm" 
+
 instTable :: M.Map String Bits
 instTable = M.fromList $ map fst instDefs
 
@@ -34,15 +37,26 @@ instDefs = [
             iFunc = \[dst,src] state ->
                 regSet state dst $ regGet state src
         }),
-        (("load32", toB "0010"), Instruction {
+        (("loadI", toB "00100"), Instruction {
             iArity = [6,32],
             iFunc = \[dst,bits] state ->
                 regSet state dst bits
         }),
-        (("loadK", toB "0001"), Instruction {
-            iArity = [6,10],
+        (("loadVI", toB "00101"), Instruction {
+            iArity = [6,32],
             iFunc = \[dst,size] state ->
-                let bits = takeFromIp state (bToI size)
+                let bits = takeFromIp state $ bToI size
+                in (flip rJump $ bToI size) $ regSet state dst bits
+        }),
+        (("loadB", toB "00110"), Instruction {
+            iArity = [6,8],
+            iFunc = \[dst,bits] state ->
+                regSet state dst bits
+        }),
+        (("loadVB", toB "00111"), Instruction {
+            iArity = [6,8],
+            iFunc = \[dst,size] state ->
+                let bits = takeFromIp state $ bToI size
                 in (flip rJump $ bToI size) $ regSet state dst bits
         }),
         (("add", toB "0110"), Instruction {
@@ -134,14 +148,18 @@ loadProgram prog = State {
     }
 
 assemble :: String -> Bits
-assemble prog = concatMap parseWord $ words prog where
-    parseWord :: String -> Bits
-    parseWord (sigil:word) = case sigil of
-        '$' -> regTable M.! word
-        'b' -> toB word
-        'i' -> reverse $ take 32 $ reverse
-            $ (replicate 32 False) ++ (iToB $ read word)
-        '.' -> instTable M.! word
+assemble prog = concatMap parseWord $ words
+    $ concatMap stripComments $ lines prog where
+        stripComments :: String -> String
+        stripComments line = ' ' : takeWhile (/= ';') line
+        
+        parseWord :: String -> Bits
+        parseWord (sigil:word) = case sigil of
+            '$' -> regTable M.! word
+            'b' -> toB word
+            'i' -> reverse $ take 32 $ reverse
+                $ (replicate 32 False) ++ (iToB $ read word)
+            '.' -> instTable M.! word
 
 writeInput :: State -> Char -> State
 writeInput state char = state { inputQueue = input } where
@@ -176,8 +194,8 @@ runState state = do
     return state''
 
 nextState :: State -> State
-nextState state = rJump state' (arity' + iSize) where
-    state' = (iFunc inst) args state
+nextState state = state' where
+    state' = (iFunc inst) args $ rJump state (arity' + iSize)
     (inst,iSize) = instruction $ drop ip (program state)
     
     args :: [Bits]
