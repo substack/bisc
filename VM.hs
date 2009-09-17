@@ -12,6 +12,7 @@ import Control.Applicative
 import Data.Foldable (toList)
 import Data.List (inits)
 import Data.List.Split (splitPlaces)
+import System.IO.Unsafe
 
 type Bits = [Bool]
 
@@ -33,14 +34,35 @@ instDefs = [
             iFunc = \[dst,src] state ->
                 regSet state dst $ regGet state src
         }),
-        (("length", toB "1110"), Instruction {
+        (("loadK", toB "00"), Instruction {
+            iArity = [6,10],
+            iFunc = \[dst,size] state ->
+                let bits = takeFromIp state (bToI size)
+                in (flip rJump $ bToI size) $ regSet state dst bits
+        }),
+        (("add", toB "0110"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $ (regGet state x) + (regGet state y)
+        }),
+        (("sub", toB "0111"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $ (regGet state x) + (regGet state y)
+        }),
+        (("length", toB "11110"), Instruction {
             iArity = [6,6],
             iFunc = \[dst,src] state ->
                 regSet state dst $ iToB $ length $ regGet state src
         }),
-        (("exit", toB "1111"), Instruction {
-            iArity = [],
-            iFunc = \_ _ -> Terminated
+        (("exitR", toB "111110"), Instruction {
+            iArity = [6],
+            iFunc = \[x] state ->
+                Terminated $ regGet state x
+        }),
+        (("exitI", toB "111111"), Instruction {
+            iArity = [32],
+            iFunc = \[bits] _ -> Terminated bits
         })
     ]
 
@@ -71,10 +93,15 @@ regSet' :: State -> String -> Bits -> State
 regSet' state name bits = regSet state (regTable M.! name) bits
 
 regAdjust :: State -> Register -> (Bits -> Bits) -> State
+regAdjust t@(Terminated _) _ _ = t
 regAdjust state reg adjuster = state {
-        registerStack = (M.adjust adjuster reg $ head $ registerStack state)
-            : (tail $ registerStack state)
+        registerStack = adjustHead (registerStack state)
+            $ M.adjust adjuster reg
     }
+
+adjustHead :: [a] -> (a -> a) -> [a]
+adjustHead [] _ = []
+adjustHead (x:xs) adjuster = adjuster x : xs
 
 regAdjust' :: State -> String -> (Bits -> Bits) -> State
 regAdjust' state name adjuster = regAdjust state (regTable M.! name) adjuster
@@ -87,7 +114,8 @@ data State = State {
     program :: Bits,
     inputQueue :: Bits,
     outputQueue :: Bits
-} | Terminated
+} | Terminated Bits
+    deriving (Show,Eq)
 
 loadProgram :: String -> State
 loadProgram prog = State {
@@ -95,36 +123,49 @@ loadProgram prog = State {
         argumentStack = [],
         callStack = [],
         registerStack = [initRegisters],
-        program = toBits prog,
+        program = assemble prog,
         inputQueue = [],
         outputQueue = []
     }
+
+assemble :: String -> Bits
+assemble prog = concatMap parseWord $ words prog where
+    parseWord :: String -> Bits
+    parseWord (sigil:word) = case sigil of
+        '$' -> regTable M.! word
+        'b' -> toB word
+        'i' -> iToB $ read word
+        '.' -> instTable M.! word
 
 writeInput :: State -> Char -> State
 writeInput state char = state { inputQueue = input } where
     input = toBits [char] ++ inputQueue state
 
 readOutput :: State -> (String, State)
+readOutput t@(Terminated _) = ("",t)
 readOutput state = (fromBits $ take len output, state') where
     output = outputQueue state
     len = (length output `div` 8) * 8
     state' = state { outputQueue = drop len output }
 
-runProgram :: State -> IO ()
+runProgram :: State -> IO Bits
 runProgram state = do
     hSetBuffering stdout NoBuffering
     hSetBuffering stdin NoBuffering
     
-    untilM_ isTerminated runState state where
-        isTerminated Terminated = True
-        isTerminated _ = False
+    Terminated returnCode <- untilM isTerminated runState state
+    return returnCode
+
+isTerminated :: State -> Bool
+isTerminated (Terminated _) = True
+isTerminated _ = False
 
 runState :: State -> IO State
 runState state = do
     state' <- whileMM (const $ hReady stdin)
         (\s -> writeInput s <$> getChar) state
     
-    let (output,state'') = readOutput state'
+    let (output,state'') = readOutput $ nextState state'
     putStr output >> hFlush stdout
     return state''
 
@@ -141,6 +182,11 @@ nextState state = rJump state' (arity' + iSize) where
     arity = iArity inst
     ip = bToI $ regGet' state "ip"
 
+takeFromIp :: State -> Int -> Bits
+takeFromIp state i = take i offset where
+    offset = drop ip $ program state
+    ip = bToI $ regGet' state "ip"
+
 instruction :: [Bool] -> (Instruction,Int)
 instruction program = (inst M.!) &&& length
     $ head $ filter (`M.member` inst) $ inits program
@@ -152,7 +198,7 @@ bToI :: [Bool] -> Int
 bToI bits = sum $ zipWith ((*) . fromEnum) (reverse bits) $ iterate (*2) 1
 
 iToB :: Int -> [Bool]
-iToB n = [ n `div` (2 ^ x) == 1 | x <- reverse powers ] where
+iToB n = [ n `div` (2 ^ x) `mod` 2 == 1 | x <- reverse powers ] where
     powers = [ 0 .. floor $ logBase 2 $ fromIntegral n ]
 
 instance Num [Bool] where
