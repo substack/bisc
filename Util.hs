@@ -1,4 +1,4 @@
-module VM.Util where
+module BISC.Util where
 
 import Control.Monad (liftM)
 

@@ -1,40 +1,7 @@
-{-
-    BISC - the bit-vector instruction set
-        sounds like: bisque
-        rhymes with: risk, disk, whisk, brisk, elektrisk
-    
-    Features:
-        * All instructions are bit aligned for better huffman coding! Save every
-          bit! Except for all the bits wasted out of laziness.
-          
-        * Registers are infinite bit vectors! This would make this instruction
-          set hard/impossible to implement in hardware probably. That is
-          somebody else's problem.
-        
-        * There is a stack of registers to create lexical closures! The
-          programmer need not worry about a function call's side effects on the
-          registers. Proper isolation!
-          
-        * Instructions can have dynamic arity! With precision to the bit!
-          It would be trivial to allow instructions to modify the instruction
-          table at runtime.
-    
-    Caveats:
-        * It's really complex. It'd be much worse in C. Blame the deadline for
-          some of the ugliness.
-        
-        * The implementation is very fargone and abstracted away from any actual 
-          raw bit twiddling. This is arguably a good thing!
-        
-        * Modern optimizations would be really hard to implement. Old
-          optimizations for non-Von Neumann architectures will probably work
-          well enough however.
--}
-
 {-# LANGUAGE FlexibleInstances #-}
-module Main where
+module BISC where
 
-import VM.Util
+import BISC.Util
 
 import Data.Bits (xor)
 import qualified Data.Map as M
@@ -43,11 +10,8 @@ import System.IO
 import Control.Monad
 import Data.BitString
 import Control.Applicative
-import Data.Foldable (toList)
-import Data.List (inits,intersperse)
-import Data.List.Split (splitPlaces,splitEvery)
-import System.IO.Unsafe
-import System.Environment (getArgs)
+import Data.List (inits)
+import Data.List.Split (splitPlaces)
 
 type Bits = [Bool]
 
@@ -55,35 +19,6 @@ data Instruction = Instruction {
     iArity :: [Int],
     iFunc :: [Bits] -> State -> State
 }
-
-
-main :: IO Int
-main = mainArgs =<< getArgs
-
--- to call main from interactive console with arguments
-mainArgs :: [String] -> IO Int
-mainArgs args = do
-    when (null args) $ error "Usage: bisc [filename.asm]"
-    
-    state <- loadProgram <$> readFile (head args)
-    let -- wrap long lines and indent to make the bytecode output look nice
-        wrap cols indent =
-            concatMap (++ (replicate indent ' '))
-            . intersperse "\n"
-            . ("" :)
-            . splitEvery (cols - indent)
-        bits = fromB $ program state
-   
-    putStrLn $ "Bytecode: "
-        ++ (show $ length bits) ++ " bits, "
-        ++ (show $ (fromIntegral $ length bits) / 8) ++ " bytes, "
-        ++ (wrap 80 4 bits) ++ "\n"
-    
-    code <- runProgram state
-    putStrLn "Return value:"
-    putStrLn $ "    Binary: " ++ (wrap 80 8 $ fromB code) ++ "\n"
-    putStrLn $ "    Integer: " ++ show (bToI code) ++ "\n"
-    return $ bToI code
 
 instTable :: M.Map String Bits
 instTable = M.fromList $ map fst instDefs
