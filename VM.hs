@@ -32,53 +32,135 @@ inst = M.fromList $ map (first snd) instDefs
 
 instDefs :: [ ((String, [Bool]), Instruction) ]
 instDefs = [
+        -- copy a register's contents into another register
         (("mov", toB "000"), Instruction {
             iArity = [6,6],
             iFunc = \[dst,src] state ->
                 regSet state dst $ regGet state src
         }),
+        -- load an integer into a register
         (("loadI", toB "00100"), Instruction {
             iArity = [6,32],
             iFunc = \[dst,bits] state ->
                 regSet state dst bits
         }),
+        -- load a variable amount with integer size into a register
         (("loadVI", toB "00101"), Instruction {
             iArity = [6,32],
             iFunc = \[dst,size] state ->
                 let bits = takeFromIp state $ bToI size
                 in (flip rJump $ bToI size) $ regSet state dst bits
         }),
+        -- load a byte into a register
         (("loadB", toB "00110"), Instruction {
             iArity = [6,8],
             iFunc = \[dst,bits] state ->
                 regSet state dst bits
         }),
+        -- load a variable amount with byte size into a register
         (("loadVB", toB "00111"), Instruction {
             iArity = [6,8],
             iFunc = \[dst,size] state ->
                 let bits = takeFromIp state $ bToI size
                 in (flip rJump $ bToI size) $ regSet state dst bits
         }),
-        (("add", toB "0110"), Instruction {
+        -- add two registers, storing the result in another register
+        (("add", toB "01000"), Instruction {
             iArity = [6,6,6],
             iFunc = \[dst,x,y] state ->
                 regSet state dst $ (regGet state x) + (regGet state y)
         }),
-        (("sub", toB "0111"), Instruction {
+        -- add a byte to a register, modifying the value of that register
+        (("addB", toB "01001"), Instruction {
+            iArity = [6,8],
+            iFunc = \[dst,x] state ->
+                regAdjust state dst (+ x)
+        }),
+        -- subtract two registers, storing the result in another register
+        (("sub", toB "01010"), Instruction {
             iArity = [6,6,6],
             iFunc = \[dst,x,y] state ->
-                regSet state dst $ (regGet state x) + (regGet state y)
+                regSet state dst $ (regGet state x) - (regGet state y)
         }),
-        (("length", toB "11110"), Instruction {
+        -- subtract a byte from a register
+        (("subB", toB "01011"), Instruction {
+            iArity = [6,8],
+            iFunc = \[dst,x] state ->
+                regSet state dst $ iToB
+                    $ (bToI $ regGet state dst) - bToI x
+        }),
+        -- multiply two registers, storing the result in another register
+        (("mul", toB "01100"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $ iToB
+                    $ (bToI $ regGet state x) * (bToI $ regGet state y)
+        }),
+        -- multiply a register by a byte
+        (("mulB", toB "01101"), Instruction {
+            iArity = [6,8],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $ iToB
+                    $ (bToI $ regGet state x) * (bToI y)
+        }),
+        -- divide two registers, storing the result in another register
+        (("div", toB "01110"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $ iToB
+                    $ (bToI $ regGet state x) `div` (bToI $ regGet state y)
+        }),
+        -- divide a register by a byte
+        (("divB", toB "01111"), Instruction {
+            iArity = [6,8],
+            iFunc = \[dst,x] state ->
+                regSet state dst $ iToB
+                    $ (bToI $ regGet state dst) `div` (bToI x)
+        }),
+        -- absolute integer equality jump
+        (("jeq", toB "1000"), Instruction {
+            iArity = [32,6,6],
+            iFunc = \[dst,x,y] state ->
+                if (regGet state x) == (regGet state y)
+                    then aJump state $ bToI dst
+                    else state
+        }),
+        -- relative byte equality jump
+        (("rjeqB", toB "1001"), Instruction {
+            iArity = [8,6,6],
+            iFunc = \[offset,x,y] state ->
+                if regGet state x == regGet state y
+                    then rJump state $ bToI offset
+                    else state
+        }),
+        -- variable-length integer-size absolute equality jump
+        (("ajeqVI", toB "10100"), Instruction {
+            iArity = [6,6,32],
+            iFunc = \[x,y,size] state ->
+                let addr = bToI $ takeFromIp state $ bToI size
+                in (flip rJump $ bToI size) $
+                    if regGet state x == regGet state y
+                        then rJump state addr else state
+        }),
+        -- compute the number of bits used in a register
+        (("length", toB "111100"), Instruction {
             iArity = [6,6],
             iFunc = \[dst,src] state ->
                 regSet state dst $ iToB $ length $ regGet state src
         }),
+        -- truncate a register
+        (("truncateI", toB "111101"), Instruction {
+            iArity = [6,32],
+            iFunc = \[dst,size] state ->
+                regAdjust state dst (take $ bToI size)
+        }),
+        -- exit with the value of a register
         (("exitR", toB "111110"), Instruction {
             iArity = [6],
             iFunc = \[x] state ->
                 Terminated $ regGet state x
         }),
+        -- exit with an integer status
         (("exitI", toB "111111"), Instruction {
             iArity = [32],
             iFunc = \[bits] _ -> Terminated bits
@@ -218,6 +300,9 @@ instruction program = (inst M.!) &&& length
 rJump :: State -> Int -> State
 rJump state i = regAdjust' state "ip" (+ (iToB i))
 
+aJump :: State -> Int -> State
+aJump state i = regSet' state "ip" $ iToB i
+
 bToI :: [Bool] -> Int
 bToI bits = sum $ zipWith ((*) . fromEnum) (reverse bits) $ iterate (*2) 1
 
@@ -227,6 +312,7 @@ iToB n = [ n `div` (2 ^ x) `mod` 2 == 1 | x <- reverse powers ] where
 
 instance Num [Bool] where
     x + y = iToB $ (bToI x) + (bToI y)
+    x - y = iToB $ (bToI x) - (bToI y)
     x * y = iToB $ (bToI x) * (bToI y)
     abs (b:bits) = True : bits
     signum bits@(b:_)
