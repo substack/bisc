@@ -11,12 +11,13 @@ import Data.BitString
 import Control.Applicative
 import Data.Foldable (toList)
 import Data.List (inits)
+import Data.List.Split (splitPlaces)
 
 type Bits = [Bool]
 
 data Instruction = Instruction {
-    iArity :: Int,
-    iFunc :: Bits -> State -> State
+    iArity :: [Int],
+    iFunc :: [Bits] -> State -> State
 }
 
 instTable :: M.Map String Bits
@@ -28,11 +29,17 @@ inst = M.fromList $ map (first snd) instDefs
 instDefs :: [ ((String, [Bool]), Instruction) ]
 instDefs = [
         (("mov", toB "00"), Instruction {
-            iArity = 12,
-            iFunc = \bits state -> state
+            iArity = [6,6],
+            iFunc = \[dst,src] state ->
+                regSet state dst $ regGet state src
+        }),
+        (("length", toB "1110"), Instruction {
+            iArity = [6,6],
+            iFunc = \[dst,src] state ->
+                regSet state dst $ iToB $ length $ regGet state src
         }),
         (("exit", toB "1111"), Instruction {
-            iArity = 0,
+            iArity = [],
             iFunc = \_ _ -> Terminated
         })
     ]
@@ -41,7 +48,7 @@ type Register = Bits
 -- pair up some words with the 6-digit binary counting set
 regTable :: M.Map String Register
 regTable = M.fromList
-    $ zip ("ip" : (map (:[]) $ ['a' .. 'z'] ++ ['α' .. 'ω']))
+    $ zip ("ip" : "acc" : (map (:[]) $ ['a' .. 'z'] ++ ['α' .. 'ω']))
     $ replicateM 6 [False,True]
 
 type Registers = M.Map Register Bits
@@ -122,14 +129,15 @@ runState state = do
     return state''
 
 nextState :: State -> State
-nextState state = rJump state' (arity + iSize) where
+nextState state = rJump state' (arity' + iSize) where
     state' = (iFunc inst) args state
     (inst,iSize) = instruction $ drop ip (program state)
     
-    args :: Bits
-    args = take arity $ drop iSize $ drop ip $ program state
+    args :: [Bits]
+    args = splitPlaces arity $ take arity'
+        $ drop iSize $ drop ip $ program state
     
-    arity, ip :: Int
+    arity' = sum arity
     arity = iArity inst
     ip = bToI $ regGet' state "ip"
 
