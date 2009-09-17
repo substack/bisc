@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 module VM where
 
 import VM.Util
@@ -7,6 +8,9 @@ import Control.Arrow
 import System.IO
 import Control.Monad
 import Data.BitString
+import Control.Applicative
+import Data.Foldable (toList)
+import Data.List (inits)
 
 type Bits = [Bool]
 
@@ -15,29 +19,63 @@ data Instruction = Instruction {
     iFunc :: Bits -> State -> State
 }
 
-type InstructionNames = M.Map String Bits
-type Registers = M.Map Bits Bits
-type RegisterNames = M.Map String Bits
+instTable :: M.Map String Bits
+instTable = M.fromList $ map fst instDefs
 
-instructionTable :: M.Map String Bits
-instructionTable = M.fromList $ map fst instructionDefs
+inst :: M.Map Bits Instruction
+inst = M.fromList $ map (first snd) instDefs
 
-instructions :: M.Map Bits Instruction
-instructions = M.fromList $ map (first snd) instructionDefs
-
-instructionDefs :: [ ((String, [Bool]), Instruction) ]
-instructionDefs = [
+instDefs :: [ ((String, [Bool]), Instruction) ]
+instDefs = [
         (("mov", toB "00"), Instruction {
-            iArity = 4,
-            iFunc = (\bits state -> state)
+            iArity = 12,
+            iFunc = \bits state -> state
+        }),
+        (("exit", toB "1111"), Instruction {
+            iArity = 0,
+            iFunc = \_ _ -> Terminated
         })
     ]
+
+type Register = Bits
+-- pair up some words with the 6-digit binary counting set
+regTable :: M.Map String Register
+regTable = M.fromList
+    $ zip ("ip" : (map (:[]) $ ['a' .. 'z'] ++ ['α' .. 'ω']))
+    $ replicateM 6 [False,True]
+
+type Registers = M.Map Register Bits
+
+regGet :: State -> Register -> Bits
+regGet state reg = (head $ registerStack state) M.! reg
+
+regGet' :: State -> String -> Bits
+regGet' state name = regGet state $ regTable M.! name
+
+regSet :: State -> Register -> Bits -> State
+regSet state reg bits = state {
+        registerStack = (M.insert reg bits $ head $ registerStack state)
+            : (tail $ registerStack state)
+    }
+
+regSet' :: State -> String -> Bits -> State
+regSet' state name bits = regSet state (regTable M.! name) bits
+
+regAdjust :: State -> Register -> (Bits -> Bits) -> State
+regAdjust state reg adjuster = state {
+        registerStack = (M.adjust adjuster reg $ head $ registerStack state)
+            : (tail $ registerStack state)
+    }
+
+regAdjust' :: State -> String -> (Bits -> Bits) -> State
+regAdjust' state name adjuster = regAdjust state (regTable M.! name) adjuster
 
 data State = State {
     programStack :: Bits,
     argumentStack :: Bits,
     callStack :: Bits,
     registerStack :: [Registers],
+    program :: Bits,
     inputQueue :: Bits,
     outputQueue :: Bits
 } | Terminated
@@ -64,11 +102,37 @@ runProgram state = do
 runState :: State -> IO State
 runState state = do
     state' <- whileMM (const $ hReady stdin)
-        (\s -> writeInput s `liftM` getChar) state
+        (\s -> writeInput s <$> getChar) state
     
     let (output,state'') = readOutput state'
     putStr output >> hFlush stdout
     return state''
-    
+
 nextState :: State -> State
-nextState state = undefined
+nextState state = rJump state arity where
+    inst = instruction $ drop ip (program state)
+    arity = iArity inst
+    ip = bToI $ regGet' state "ip"
+
+instruction :: [Bool] -> Instruction
+instruction program = inst M.! i where
+    i = head $ filter (`M.member` inst) $ inits program
+
+rJump :: State -> Int -> State
+rJump state i = regAdjust' state "ip" (+ (iToB i))
+
+bToI :: [Bool] -> Int
+bToI bits = sum $ zipWith ((*) . fromEnum) (reverse bits) $ iterate (*2) 1
+
+iToB :: Int -> [Bool]
+iToB n = [ n `div` (2 ^ x) == 1 | x <- reverse powers ] where
+    powers = [ 0 .. floor $ logBase 2 $ fromIntegral n ]
+
+instance Num [Bool] where
+    x + y = iToB $ (bToI x) + (bToI y)
+    x * y = iToB $ (bToI x) * (bToI y)
+    abs (b:bits) = True : bits
+    signum bits@(b:_)
+        | all not bits = [ False ]
+        | otherwise = [ b ]
+    fromInteger i = iToB $ fromInteger i
