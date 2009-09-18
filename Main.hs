@@ -1,4 +1,6 @@
 {-
+    James Halliday
+    
     BISC - the bit-vector instruction set
         sounds like: bisque
         rhymes with: risk, disk, whisk, brisk, elektrisk

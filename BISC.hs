@@ -1,7 +1,7 @@
+-- James Halliday
+
 {-# LANGUAGE FlexibleInstances #-}
 module BISC where
-
-import BISC.Util
 
 import System.IO hiding (putStr)
 import Prelude hiding (putStr)
@@ -458,3 +458,19 @@ instance Num [Bool] where
         | all not bits = [ False ]
         | otherwise = [ b ]
     fromInteger i = iToB $ fromInteger i
+
+-- and some other stuff...
+
+untilMM :: Monad m => (a -> m Bool) -> (a -> m a) -> a -> m a
+untilMM cond update value = do
+    result <- cond value
+    if result
+        then return value
+        else untilMM cond update =<< update value
+
+untilM :: Monad m => (a -> Bool) -> (a -> m a) -> a -> m a
+untilM cond = untilMM $ return . cond
+
+whileMM :: Monad m => (a -> m Bool) -> (a -> m a) -> a -> m a
+whileMM cond = untilMM $ (liftM not) . cond
+
