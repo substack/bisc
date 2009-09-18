@@ -119,7 +119,7 @@ instDefs = [
         (("jeq", toB "10000"), Instruction {
             iArity = [32,6,6],
             iFunc = \[dst,x,y] state ->
-                if (regGet state x) == (regGet state y)
+                if (bToI $ regGet state x) == (bToI $ regGet state y)
                     then aJump state $ bToI dst
                     else state
         }),
@@ -127,34 +127,25 @@ instDefs = [
         (("jne", toB "10001"), Instruction {
             iArity = [32,6,6],
             iFunc = \[dst,x,y] state ->
-                if (regGet state x) /= (regGet state y)
+                if (bToI $ regGet state x) /= (bToI $ regGet state y)
                     then aJump state $ bToI dst
                     else state
         }),
-        -- relative byte equality jump
-        (("rjeqB", toB "10010"), Instruction {
-            iArity = [8,6,6],
-            iFunc = \[offset,x,y] state ->
-                if regGet state x == regGet state y
-                    then rJump state $ bToI offset
+        -- absolute integer less than jump
+        (("jlt", toB "10010"), Instruction {
+            iArity = [32,6,6],
+            iFunc = \[dst,x,y] state ->
+                if (bToI $ regGet state x) < (bToI $ regGet state y)
+                    then aJump state $ bToI dst
                     else state
         }),
-        -- relative byte negative equality jump
-        (("rjneB", toB "10011"), Instruction {
-            iArity = [8,6,6],
-            iFunc = \[offset,x,y] state ->
-                if regGet state x /= regGet state y
-                    then rJump state $ bToI offset
+        -- absolute integer greater than jump
+        (("jgt", toB "10011"), Instruction {
+            iArity = [32,6,6],
+            iFunc = \[dst,x,y] state ->
+                if (bToI $ regGet state x) > (bToI $ regGet state y)
+                    then aJump state $ bToI dst
                     else state
-        }),
-        -- variable-length integer-size absolute equality jump
-        (("ajeqVI", toB "10100"), Instruction {
-            iArity = [6,6,32],
-            iFunc = \[x,y,size] state ->
-                let addr = bToI $ takeFromIp state $ bToI size
-                in (flip rJump $ bToI size) $
-                    if regGet state x == regGet state y
-                        then rJump state addr else state
         }),
         -- bitwise "and" of two registers, storing the result in a third
         (("and", toB "101010"), Instruction {
@@ -287,8 +278,10 @@ assemble prog = concat $ snd $ mapAccumL parseWord (M.empty,0) $ words
                 '$' -> (labels, regTable M.! word)
                 -- b : binary string
                 'b' -> (labels, toB word)
+                -- B : 8-bit byte
+                'B' -> (labels, pack 8 $ iToB $ read word)
                 -- i : 32-bit integer
-                'i' -> ((,) labels) $ pack 32 $ iToB $ read word
+                'i' -> (labels, pack 32 $ iToB $ read word)
                 -- . : instruction
                 '.' -> (labels, instTable M.! word)
                 -- * : label
