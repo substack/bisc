@@ -31,10 +31,16 @@ inst = M.fromList $ map (first snd) instDefs
 instDefs :: [ ((String, [Bool]), Instruction) ]
 instDefs = [
         -- copy a register's contents into another register
-        (("mov", toB "000"), Instruction {
+        (("mov", toB "0000"), Instruction {
             iArity = [6,6],
             iFunc = \[dst,src] state ->
                 regSet state dst $ regGet state src
+        }),
+        -- copy an integer number of bits from one register to another
+        (("movI", toB "0001"), Instruction {
+            iArity = [6,6,32],
+            iFunc = \[dst,src,size] state ->
+                regSet state dst $ take (bToI size) $ regGet state src
         }),
         -- load an integer into a register
         (("loadI", toB "00100"), Instruction {
@@ -147,6 +153,17 @@ instDefs = [
                     then aJump state $ bToI dst
                     else state
         }),
+        -- unconditional absolute integer jump
+        (("jmp", toB "10100"), Instruction {
+            iArity = [32],
+            iFunc = \[dst] state -> aJump state $ bToI dst
+        }),
+        -- bitwise "not" of one register, storing the result in a second
+        (("not", toB "10101"), Instruction {
+            iArity = [6,6],
+            iFunc = \[dst,src] state ->
+                regSet state dst $ map not (regGet state src)
+        }),
         -- bitwise "and" of two registers, storing the result in a third
         (("and", toB "101010"), Instruction {
             iArity = [6,6,6],
@@ -189,14 +206,29 @@ instDefs = [
             iFunc = \[dst,size] state ->
                 regAdjust state dst (take $ bToI size)
         }),
+        -- block until one byte is available in the out register
+        (("blockB", toB "1111110"), Instruction {
+            iArity = [],
+            iFunc = \[] state -> unsafePerformIO $ do
+                return $ if (length $ regGet' state "in") >= 8
+                    then state
+                    else rJump state 8
+        }), -- block until the integer-sized number of bits are available
+        (("blockI", toB "1111111"), Instruction {
+            iArity = [32],
+            iFunc = \[size] state ->
+                if (length $ regGet' state "in") >= bToI size
+                    then state
+                    else rJump state (- length "1111111")
+        }),
         -- exit with the value of a register
-        (("exitR", toB "111110"), Instruction {
+        (("exitR", toB "1111100"), Instruction {
             iArity = [6],
             iFunc = \[x] state ->
                 Terminated $ regGet state x
         }),
         -- exit with an integer status
-        (("exitI", toB "111111"), Instruction {
+        (("exitI", toB "1111101"), Instruction {
             iArity = [32],
             iFunc = \[bits] _ -> Terminated bits
         })
@@ -206,7 +238,7 @@ type Register = Bits
 -- pair up some words with the 6-digit binary counting set
 regTable :: M.Map String Register
 regTable = M.fromList
-    $ zip ("ip" : "acc" : (map (:[]) $ ['a' .. 'z'] ++ ['α' .. 'ω']))
+    $ zip ("ip" : "in" : "out" : (map (:[]) $ ['a' .. 'z'] ++ ['α' .. 'ω']))
     $ replicateM 6 [False,True]
 
 type Registers = M.Map Register Bits
@@ -244,9 +276,7 @@ data State = State {
     argumentStack :: Bits,
     callStack :: Bits,
     registerStack :: [Registers],
-    program :: Bits,
-    inputQueue :: Bits,
-    outputQueue :: Bits
+    program :: Bits
 } | Terminated Bits
     deriving (Show,Eq)
 
@@ -256,9 +286,7 @@ loadProgram prog = State {
         argumentStack = [],
         callStack = [],
         registerStack = [initRegisters],
-        program = assemble prog,
-        inputQueue = [],
-        outputQueue = []
+        program = assemble prog
     }
 
 assemble :: String -> Bits
@@ -280,8 +308,12 @@ assemble prog = concat $ snd $ mapAccumL parseWord (M.empty,0) $ words
                 'b' -> (labels, toB word)
                 -- B : 8-bit byte
                 'B' -> (labels, pack 8 $ iToB $ read word)
+                -- c: 8-bit byte (character order)
+                'c' -> (labels, reverse $ pack 8 $ iToB $ read word)
                 -- i : 32-bit integer
                 'i' -> (labels, pack 32 $ iToB $ read word)
+                -- " : ascii string
+                '"' -> (labels, toBits word)
                 -- . : instruction
                 '.' -> (labels, instTable M.! word)
                 -- * : label
@@ -294,15 +326,15 @@ pack n bits = reverse $ take n $ reverse
     $ (replicate n False) ++ bits
 
 writeInput :: State -> Char -> State
-writeInput state char = state { inputQueue = input } where
-    input = toBits [char] ++ inputQueue state
+writeInput state char = regSet' state "in" input where
+    input = toBits [char] ++ regGet' state "in"
 
 readOutput :: State -> (String, State)
 readOutput t@(Terminated _) = ("",t)
 readOutput state = (fromBits $ take len output, state') where
-    output = outputQueue state
+    output = regGet' state "out"
     len = (length output `div` 8) * 8
-    state' = state { outputQueue = drop len output }
+    state' = regSet' state "out" $ drop len output
 
 runProgram :: State -> IO Bits
 runProgram state = do

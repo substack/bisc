@@ -67,8 +67,10 @@ mainArgs args = do
         ++ (show $ (fromIntegral $ length bits) / 8) ++ " bytes, "
         ++ (wrap 80 4 bits) ++ "\n"
     
+    putStrLn "Program output:"
     code <- runProgram state
-    putStrLn "Return value:"
+    
+    putStrLn "\nReturn value:"
     putStrLn $ "    Binary: " ++ (wrap 80 8 $ fromB code) ++ "\n"
     putStrLn $ "    Integer: " ++ show (bToI code) ++ "\n"
     return $ bToI code
