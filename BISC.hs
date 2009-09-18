@@ -3,17 +3,18 @@ module BISC where
 
 import BISC.Util
 
+import System.IO hiding (putStr)
+import Prelude hiding (putStr)
+import System.IO.UTF8 (putStr)
+
 import Data.Bits (xor)
 import qualified Data.Map as M
 import Control.Arrow
-import System.IO
 import Control.Monad
 import Data.BitString
 import Control.Applicative
 import Data.List (inits,mapAccumL)
 import Data.List.Split (splitPlaces)
-
-import System.IO.Unsafe
 
 type Bits = [Bool]
 
@@ -22,12 +23,14 @@ data Instruction = Instruction {
     iFunc :: [Bits] -> State -> State
 }
 
+-- instruction tables and such
 instTable :: M.Map String Bits
 instTable = M.fromList $ map fst instDefs
 
 inst :: M.Map Bits Instruction
 inst = M.fromList $ map (first snd) instDefs
 
+-- the instruction definitions
 instDefs :: [ ((String, [Bool]), Instruction) ]
 instDefs = [
         -- copy a register's contents into another register
@@ -154,12 +157,12 @@ instDefs = [
                     else state
         }),
         -- unconditional absolute integer jump
-        (("jmp", toB "10100"), Instruction {
+        (("jmp", toB "101000"), Instruction {
             iArity = [32],
             iFunc = \[dst] state -> aJump state $ bToI dst
         }),
         -- bitwise "not" of one register, storing the result in a second
-        (("not", toB "10101"), Instruction {
+        (("not", toB "101001"), Instruction {
             iArity = [6,6],
             iFunc = \[dst,src] state ->
                 regSet state dst $ map not (regGet state src)
@@ -187,12 +190,40 @@ instDefs = [
                         (regGet state x) (regGet state y)
         }),
         -- bitwise "nand" of two registers, storing the result in a third
-        (("nand", toB "101100"), Instruction {
+        (("nand", toB "101101"), Instruction {
             iArity = [6,6,6],
             iFunc = \[dst,x,y] state ->
                 regSet state dst $
                     zipWith (\x y -> not (x && y))
                         (regGet state x) (regGet state y)
+        }),
+        -- left shift a register by a register, storing the result in a third
+        (("shiftL", toB "101110"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $ (regGet state y)
+                    ++ (replicate (bToI $ regGet state x)) False
+        }),
+        -- right shift a register by a register, storing the result in a third
+        (("shiftR", toB "101111"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $
+                    let r = regGet state x
+                    in take (length r - bToI r) $ regGet state y
+        }),
+        -- arithmetic right shift a register by a register, storing the result
+        -- in a third register
+        -- The first bit is treated as the sign bit not that there is any
+        -- explicitly signd arithmetic.
+        (("shiftRA", toB "110000"), Instruction {
+            iArity = [6,6,6],
+            iFunc = \[dst,x,y] state ->
+                regSet state dst $
+                    let
+                        r = regGet state x
+                        (sign:[],v) = splitAt 1 $ regGet state y
+                    in sign : take (length r - bToI r) v
         }),
         -- compute the number of bits used in a register
         (("length", toB "111100"), Instruction {
@@ -201,7 +232,7 @@ instDefs = [
                 regSet state dst $ iToB $ length $ regGet state src
         }),
         -- truncate a register
-        (("truncateI", toB "111101"), Instruction {
+        (("truncateVI", toB "111101"), Instruction {
             iArity = [6,32],
             iFunc = \[dst,size] state ->
                 regAdjust state dst (take $ bToI size)
@@ -209,12 +240,12 @@ instDefs = [
         -- block until one byte is available in the out register
         (("blockB", toB "1111110"), Instruction {
             iArity = [],
-            iFunc = \[] state -> unsafePerformIO $ do
-                return $ if (length $ regGet' state "in") >= 8
+            iFunc = \[] state ->
+                if (length $ regGet' state "in") >= 8
                     then state
                     else rJump state 8
         }), -- block until the integer-sized number of bits are available
-        (("blockI", toB "1111111"), Instruction {
+        (("blockVI", toB "1111111"), Instruction {
             iArity = [32],
             iFunc = \[size] state ->
                 if (length $ regGet' state "in") >= bToI size
@@ -238,12 +269,18 @@ type Register = Bits
 -- pair up some words with the 6-digit binary counting set
 regTable :: M.Map String Register
 regTable = M.fromList
+    -- ip: instruction pointer
+    -- in: input buffer
+    -- out: output buffer
+    -- roman letters after that, then greek letters
     $ zip ("ip" : "in" : "out" : (map (:[]) $ ['a' .. 'z'] ++ ['α' .. 'ω']))
-    $ replicateM 6 [False,True]
+    $ replicateM 6 [False,True] -- this line is magical
 
 type Registers = M.Map Register Bits
 initRegisters :: Registers
 initRegisters = M.fromList $ zip (M.elems regTable) $ repeat []
+
+-- get and set registers...
 
 regGet :: State -> Register -> Bits
 regGet state reg = (head $ registerStack state) M.! reg
@@ -271,7 +308,9 @@ adjustHead (x:xs) adjuster = adjuster x : xs
 regAdjust' :: State -> String -> (Bits -> Bits) -> State
 regAdjust' state name adjuster = regAdjust state (regTable M.! name) adjuster
 
+-- state of the simulated system
 data State = State {
+    -- most fields are not yet useful on account of time constraints
     programStack :: Bits,
     argumentStack :: Bits,
     callStack :: Bits,
@@ -280,6 +319,7 @@ data State = State {
 } | Terminated Bits
     deriving (Show,Eq)
 
+-- load a program by assembling a string into a state machine
 loadProgram :: String -> State
 loadProgram prog = State {
         programStack = [],
@@ -289,6 +329,7 @@ loadProgram prog = State {
         program = assemble prog
     }
 
+-- turn a string program into a series of bits
 assemble :: String -> Bits
 assemble prog = concat $ snd $ mapAccumL parseWord (M.empty,0) $ words
     $ concatMap stripComments $ lines prog where
@@ -321,14 +362,17 @@ assemble prog = concat $ snd $ mapAccumL parseWord (M.empty,0) $ words
                 -- & : address of label
                 '&' -> (labels, pack 32 $ iToB $ labels M.! word)
 
+-- stuff a value into a finite bit vector
 pack :: Int -> Bits -> Bits
 pack n bits = reverse $ take n $ reverse
     $ (replicate n False) ++ bits
 
+-- add a byte to the $in register
 writeInput :: State -> Char -> State
 writeInput state char = regSet' state "in" input where
     input = toBits [char] ++ regGet' state "in"
 
+-- take bytes out of the $out register
 readOutput :: State -> (String, State)
 readOutput t@(Terminated _) = ("",t)
 readOutput state = (fromBits $ take len output, state') where
@@ -336,6 +380,7 @@ readOutput state = (fromBits $ take len output, state') where
     len = (length output `div` 8) * 8
     state' = regSet' state "out" $ drop len output
 
+-- run the program until it halts or doesn't
 runProgram :: State -> IO Bits
 runProgram state = do
     hSetBuffering stdout NoBuffering
@@ -344,10 +389,12 @@ runProgram state = do
     Terminated returnCode <- untilM isTerminated runState state
     return returnCode
 
+-- whether the program has finished
 isTerminated :: State -> Bool
 isTerminated (Terminated _) = True
 isTerminated _ = False
 
+-- thread the state along, adjusting input and output buffers
 runState :: State -> IO State
 runState state = do
     state' <- whileMM (const $ hReady stdin)
@@ -357,6 +404,9 @@ runState state = do
     putStr output >> hFlush stdout
     return state''
 
+-- move from one state to the next,
+-- giving instructions their requested operands
+-- and advancing the instruction pointer
 nextState :: State -> State
 nextState state = state' where
     state' = (iFunc inst) args $ rJump state (arity' + iSize)
@@ -370,28 +420,35 @@ nextState state = state' where
     arity = iArity inst
     ip = bToI $ regGet' state "ip"
 
+-- take bits which come after the instruction pointer
 takeFromIp :: State -> Int -> Bits
 takeFromIp state i = take i offset where
     offset = drop ip $ program state
     ip = bToI $ regGet' state "ip"
 
+-- match a program bit vector with the first instruction code that matches
 instruction :: [Bool] -> (Instruction,Int)
 instruction program = (inst M.!) &&& length
     $ head $ filter (`M.member` inst) $ inits program
 
+-- relative jump
 rJump :: State -> Int -> State
 rJump state i = regAdjust' state "ip" (+ (iToB i))
 
+-- absolute jump
 aJump :: State -> Int -> State
 aJump state i = regSet' state "ip" $ iToB i
 
+-- convert a bit vector to an integer
 bToI :: [Bool] -> Int
 bToI bits = sum $ zipWith ((*) . fromEnum) (reverse bits) $ iterate (*2) 1
 
+-- convert an integer to a bit vector
 iToB :: Int -> [Bool]
 iToB n = [ n `div` (2 ^ x) `mod` 2 == 1 | x <- reverse powers ] where
     powers = [ 0 .. floor $ logBase 2 $ fromIntegral n ]
 
+-- do some bit vector mathematics
 instance Num [Bool] where
     x + y = iToB $ (bToI x) + (bToI y)
     x - y = iToB $ (bToI x) - (bToI y)
