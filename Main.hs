@@ -21,7 +21,9 @@
     
     Caveats:
         * It's really complex. It'd be much worse in C. Blame the deadline for
-          some of the ugliness.
+          some of the ugliness. As an aside, Hindley-Milner type inference is
+          really tremendously useful when putting together big projects in a
+          short amount of time.
         
         * The implementation is very fargone and abstracted away from any actual 
           raw bit twiddling. This is arguably a good thing!

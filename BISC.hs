@@ -10,8 +10,10 @@ import System.IO
 import Control.Monad
 import Data.BitString
 import Control.Applicative
-import Data.List (inits)
+import Data.List (inits,mapAccumL)
 import Data.List.Split (splitPlaces)
+
+import System.IO.Unsafe
 
 type Bits = [Bool]
 
@@ -114,18 +116,34 @@ instDefs = [
                     $ (bToI $ regGet state dst) `div` (bToI x)
         }),
         -- absolute integer equality jump
-        (("jeq", toB "1000"), Instruction {
+        (("jeq", toB "10000"), Instruction {
             iArity = [32,6,6],
             iFunc = \[dst,x,y] state ->
                 if (regGet state x) == (regGet state y)
                     then aJump state $ bToI dst
                     else state
         }),
+        -- absolute integer negative equality jump
+        (("jne", toB "10001"), Instruction {
+            iArity = [32,6,6],
+            iFunc = \[dst,x,y] state ->
+                if (regGet state x) /= (regGet state y)
+                    then aJump state $ bToI dst
+                    else state
+        }),
         -- relative byte equality jump
-        (("rjeqB", toB "1001"), Instruction {
+        (("rjeqB", toB "10010"), Instruction {
             iArity = [8,6,6],
             iFunc = \[offset,x,y] state ->
                 if regGet state x == regGet state y
+                    then rJump state $ bToI offset
+                    else state
+        }),
+        -- relative byte negative equality jump
+        (("rjneB", toB "10011"), Instruction {
+            iArity = [8,6,6],
+            iFunc = \[offset,x,y] state ->
+                if regGet state x /= regGet state y
                     then rJump state $ bToI offset
                     else state
         }),
@@ -253,26 +271,34 @@ loadProgram prog = State {
     }
 
 assemble :: String -> Bits
-assemble prog = concatMap parseWord $ words
+assemble prog = concat $ snd $ mapAccumL parseWord (M.empty,0) $ words
     $ concatMap stripComments $ lines prog where
         stripComments :: String -> String
         stripComments line = ' ' : takeWhile (/= ';') line
         
-        parseWord :: String -> Bits
-        parseWord (sigil:word) = case sigil of
-            -- $ : register
-            '$' -> regTable M.! word
-            -- b : binary string
-            'b' -> toB word
-            -- i : 32-bit integer
-            'i' -> reverse $ take 32 $ reverse
-                $ (replicate 32 False) ++ (iToB $ read word)
-            -- . : instruction
-            '.' -> instTable M.! word
-            -- * : label
-            '*' -> undefined
-            -- & : address of label
-            '&' -> undefined
+        parseWord ::
+            (M.Map String Int, Int) ->
+            String ->
+            ((M.Map String Int, Int), Bits)
+        parseWord (labels,pos) (sigil:word) = parsed where
+            parsed = ((labels', pos + length bits), bits)
+            (labels',bits) = case sigil of
+                -- $ : register
+                '$' -> (labels, regTable M.! word)
+                -- b : binary string
+                'b' -> (labels, toB word)
+                -- i : 32-bit integer
+                'i' -> ((,) labels) $ pack 32 $ iToB $ read word
+                -- . : instruction
+                '.' -> (labels, instTable M.! word)
+                -- * : label
+                '*' -> (M.insert word pos labels, [])
+                -- & : address of label
+                '&' -> (labels, pack 32 $ iToB $ labels M.! word)
+
+pack :: Int -> Bits -> Bits
+pack n bits = reverse $ take n $ reverse
+    $ (replicate n False) ++ bits
 
 writeInput :: State -> Char -> State
 writeInput state char = state { inputQueue = input } where
