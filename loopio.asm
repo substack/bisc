@@ -23,7 +23,7 @@
 ; 8
 
 .loadB $i B0
-.loadB $λ b11110111
+.loadB $λ b11110111 ; unicode registers!
 .not $λ $λ ; $λ == 8
 
 .loadB $d "q ; stop on the the letter q

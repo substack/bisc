@@ -6,6 +6,35 @@
         rhymes with: risk, disk, whisk, brisk, elektrisk
         much more CISCy than CISC
     
+    Examples:
+        See the included 1337.asm and loopio.asm for examples.
+        The code is assembled from plaintext with lots of comments so it should
+        be easy to figure out.
+    
+    Syntax Guide:
+        Instructions start with .
+            For a list, see the instDefs part of BISC.hs
+        
+        Registers start with $.
+            The special registers are:
+                $ip for the instruction pointer
+                $out for the output buffer
+                $in for the input buffer
+            The other registers are:
+                $a through $z,
+                $α through $ω (alpha through omega)
+        
+        Labels start with * to denote a label,
+        and & to use a previously-defined label as a location to jump to.
+    
+        Constants start with
+            b for binary strings of any length
+            B for 8 bit bytes in integer order
+            c for 8 bit bytes in character order
+            i for 32-bit integers
+            " for an ascii string
+                note: terminated on whitespace
+        
     Features:
         * Instructions are any size for better potential huffman coding!
           Save every bit! Unless it's too hard, then forget it.
@@ -70,7 +99,7 @@ mainArgs args = do
             . splitEvery (cols - indent)
         bits = fromB $ program state
    
-    putStrLn $ "Bytecode: "
+    putStrLn $ "Bitcode: "
         ++ (show $ length bits) ++ " bits, "
         ++ (show $ (fromIntegral $ length bits) / 8) ++ " bytes, "
         ++ (wrap 80 4 bits) ++ "\n"
